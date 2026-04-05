@@ -143,6 +143,47 @@ describe("Utility Routes", () => {
 		});
 	});
 
+	describe("Stats endpoint", () => {
+		it("returns stats when STATS_ACCESS_TOKEN is unset", async () => {
+			const request = new Request("http://localhost/stats");
+			const mockEnv = {
+				OAUTH_KV: {
+					list: async () => ({ keys: [] }),
+				},
+			} as any;
+			const response = await utilityRoutes.fetch(request, mockEnv, {} as any);
+			expect(response.status).toBe(200);
+			const data = await response.json();
+			expect(data).toMatchObject({
+				total_users: 0,
+				active_sessions: 0,
+				pending_approvals: 0,
+			});
+		});
+
+		it("returns 401 when STATS_ACCESS_TOKEN is set but header missing", async () => {
+			const request = new Request("http://localhost/stats");
+			const mockEnv = {
+				OAUTH_KV: { list: async () => ({ keys: [] }) },
+				STATS_ACCESS_TOKEN: "secret-stats-token",
+			} as any;
+			const response = await utilityRoutes.fetch(request, mockEnv, {} as any);
+			expect(response.status).toBe(401);
+		});
+
+		it("returns 200 when bearer matches STATS_ACCESS_TOKEN", async () => {
+			const request = new Request("http://localhost/stats", {
+				headers: { Authorization: "Bearer secret-stats-token" },
+			});
+			const mockEnv = {
+				OAUTH_KV: { list: async () => ({ keys: [] }) },
+				STATS_ACCESS_TOKEN: "secret-stats-token",
+			} as any;
+			const response = await utilityRoutes.fetch(request, mockEnv, {} as any);
+			expect(response.status).toBe(200);
+		});
+	});
+
 	describe("Error Handling", () => {
 		it("should handle 404 for unknown routes", async () => {
 			const request = new Request("http://localhost/unknown");

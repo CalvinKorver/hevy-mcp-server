@@ -23,12 +23,78 @@ import {
 	maskApiKey,
 } from "./lib/key-storage.js";
 import { HevyClient } from "./lib/client.js";
+import { parseGithubLoginAllowlist, isGithubLoginAllowed } from "./lib/access-control.js";
+
+interface OauthResumePayload {
+	clientId: string;
+	redirectUri: string;
+	state: string;
+	scope: string;
+}
 
 interface Env {
 	OAUTH_KV: KVNamespace;
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	COOKIE_ENCRYPTION_KEY: string;
+	/** Comma-separated GitHub logins; if unset, any GitHub user may sign in */
+	ALLOWED_GITHUB_LOGINS?: string;
+}
+
+const OAUTH_RESUME_TTL = 600;
+
+function oauthResumeKey(sessionToken: string): string {
+	return `oauth_resume:${sessionToken}`;
+}
+
+function getSessionTokenFromCookie(c: { req: { header: (name: string) => string | undefined } }): string | undefined {
+	return c.req.header("Cookie")?.match(/session=([^;]+)/)?.[1];
+}
+
+function buildResumeAuthorizeUrl(baseUrl: string, p: OauthResumePayload): string {
+	const u = new URL("/authorize", baseUrl);
+	u.searchParams.set("client_id", p.clientId);
+	u.searchParams.set("redirect_uri", p.redirectUri);
+	u.searchParams.set("state", p.state);
+	if (p.scope) {
+		u.searchParams.set("scope", p.scope);
+	}
+	return u.toString();
+}
+
+async function readOauthResume(
+	kv: KVNamespace,
+	sessionToken: string,
+): Promise<OauthResumePayload | null> {
+	const data = await kv.get(oauthResumeKey(sessionToken), "json");
+	if (!data || typeof data !== "object") {
+		return null;
+	}
+	const o = data as Record<string, unknown>;
+	if (
+		typeof o.clientId !== "string" ||
+		typeof o.redirectUri !== "string" ||
+		typeof o.state !== "string"
+	) {
+		return null;
+	}
+	return {
+		clientId: o.clientId,
+		redirectUri: o.redirectUri,
+		state: o.state,
+		scope: typeof o.scope === "string" ? o.scope : "mcp",
+	};
+}
+
+function sessionCookieHeader(sessionToken: string): string {
+	return `session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`;
+}
+
+function allowlistForbiddenResponse(c: any) {
+	return c.text(
+		"Access denied: this GitHub account is not authorized to use this server.",
+		403,
+	);
 }
 
 // Create Hono app for OAuth routes
@@ -163,6 +229,21 @@ app.get("/authorize", async (c) => {
 
 		if (sessionData && typeof sessionData === "object" && "login" in sessionData) {
 			const username = (sessionData as { login: string }).login;
+			const allowlist = parseGithubLoginAllowlist(c.env.ALLOWED_GITHUB_LOGINS);
+			if (!isGithubLoginAllowed(username, allowlist)) {
+				return allowlistForbiddenResponse(c);
+			}
+
+			const resume = await readOauthResume(c.env.OAUTH_KV, sessionToken);
+			if (
+				resume &&
+				resume.clientId === clientId &&
+				resume.redirectUri === redirectUri &&
+				resume.state === state
+			) {
+				await c.env.OAUTH_KV.delete(oauthResumeKey(sessionToken));
+			}
+
 			const alreadyApproved = await clientIdAlreadyApproved(c.env.OAUTH_KV, username, clientId);
 
 			if (alreadyApproved) {
@@ -215,8 +296,7 @@ app.get("/authorize", async (c) => {
 		{ expirationTtl: 600 } // 10 minutes
 	);
 
-	const url = new URL(c.req.url);
-	const callbackUri = `${url.protocol}//${url.host}/callback`;
+	const callbackUri = `${getBaseUrl(c)}/callback`;
 
 	const githubAuthUrl = getUpstreamAuthorizeUrl(
 		c.env.GITHUB_CLIENT_ID,
@@ -253,6 +333,10 @@ app.post("/authorize", async (c) => {
 	}
 
 	const username = (sessionData as { login: string }).login;
+	const allowlist = parseGithubLoginAllowlist(c.env.ALLOWED_GITHUB_LOGINS);
+	if (!isGithubLoginAllowed(username, allowlist)) {
+		return allowlistForbiddenResponse(c);
+	}
 
 	// Store approval
 	await storeClientApproval(c.env.OAUTH_KV, username, approval.clientId);
@@ -304,8 +388,7 @@ app.get("/callback", async (c) => {
 
 	try {
 		// Exchange code for GitHub access token
-		const url = new URL(c.req.url);
-		const callbackUri = `${url.protocol}//${url.host}/callback`;
+		const callbackUri = `${getBaseUrl(c)}/callback`;
 
 		const accessToken = await fetchUpstreamAuthToken(
 			code,
@@ -317,9 +400,15 @@ app.get("/callback", async (c) => {
 		// Fetch user information from GitHub
 		const user = await fetchGitHubUser(accessToken);
 
+		const allowlist = parseGithubLoginAllowlist(c.env.ALLOWED_GITHUB_LOGINS);
+		if (!isGithubLoginAllowed(user.login, allowlist)) {
+			await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
+			return allowlistForbiddenResponse(c);
+		}
+
 		// Create session
 		const sessionToken = generateState();
-		const baseUrl = `${url.protocol}//${url.host}`;
+		const baseUrl = getBaseUrl(c);
 		const sessionData: Props = {
 			login: user.login,
 			name: user.name,
@@ -335,6 +424,27 @@ app.get("/callback", async (c) => {
 
 		// Clean up state
 		await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
+
+		const hevyKey = await getUserApiKey(
+			c.env.OAUTH_KV,
+			c.env.COOKIE_ENCRYPTION_KEY,
+			user.login,
+		);
+
+		if (!hevyKey) {
+			const resume: OauthResumePayload = {
+				clientId,
+				redirectUri,
+				state: clientState,
+				scope,
+			};
+			await c.env.OAUTH_KV.put(oauthResumeKey(sessionToken), JSON.stringify(resume), {
+				expirationTtl: OAUTH_RESUME_TTL,
+			});
+			const response = c.redirect(`${getBaseUrl(c)}/setup`);
+			response.headers.set("Set-Cookie", sessionCookieHeader(sessionToken));
+			return response;
+		}
 
 		// Check if client is already approved
 		const alreadyApproved = await clientIdAlreadyApproved(c.env.OAUTH_KV, user.login, clientId);
@@ -358,10 +468,7 @@ app.get("/callback", async (c) => {
 
 			// Set session cookie
 			const response = c.redirect(redirectUrl.toString());
-			response.headers.set(
-				"Set-Cookie",
-				`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
-			);
+			response.headers.set("Set-Cookie", sessionCookieHeader(sessionToken));
 			return response;
 		}
 
@@ -377,10 +484,7 @@ app.get("/callback", async (c) => {
 		});
 
 		const response = c.html(html);
-		response.headers.set(
-			"Set-Cookie",
-			`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
-		);
+		response.headers.set("Set-Cookie", sessionCookieHeader(sessionToken));
 		return response;
 	} catch (error) {
 		console.error("OAuth callback error:", error);
@@ -550,6 +654,7 @@ app.get("/logout", async (c) => {
 
 	if (sessionToken) {
 		await c.env.OAUTH_KV.delete(`session:${sessionToken}`);
+		await c.env.OAUTH_KV.delete(oauthResumeKey(sessionToken));
 	}
 
 	const response = c.text("Logged out successfully");
@@ -585,10 +690,10 @@ app.get("/setup", async (c) => {
 
 	if (!session) {
 		// Redirect to login if not authenticated
-		const url = new URL(c.req.url);
-		const authorizeUrl = new URL("/authorize", url.origin);
+		const baseUrl = getBaseUrl(c);
+		const authorizeUrl = new URL("/authorize", baseUrl);
 		authorizeUrl.searchParams.set("client_id", "setup");
-		authorizeUrl.searchParams.set("redirect_uri", `${url.origin}/setup`);
+		authorizeUrl.searchParams.set("redirect_uri", `${baseUrl}/setup`);
 		authorizeUrl.searchParams.set("state", "setup");
 		return c.redirect(authorizeUrl.toString());
 	}
@@ -599,6 +704,15 @@ app.get("/setup", async (c) => {
 		c.env.COOKIE_ENCRYPTION_KEY,
 		session.login
 	);
+
+	const sessionToken = getSessionTokenFromCookie(c);
+	let pendingMcpResumeUrl = "";
+	if (sessionToken && hasApiKey) {
+		const resume = await readOauthResume(c.env.OAUTH_KV, sessionToken);
+		if (resume) {
+			pendingMcpResumeUrl = buildResumeAuthorizeUrl(getBaseUrl(c), resume);
+		}
+	}
 
 	const html = `
 <!DOCTYPE html>
@@ -703,6 +817,21 @@ app.get("/setup", async (c) => {
 			background: #fff3cd;
 			color: #856404;
 			border: 1px solid #ffeaa7;
+		}
+
+		.mcp-resume-banner {
+			background: #e7f1ff;
+			color: #0b4a8f;
+			border: 1px solid #b6d4fe;
+			border-radius: 8px;
+			padding: 14px 16px;
+			margin-bottom: 20px;
+			font-size: 15px;
+		}
+
+		.mcp-resume-banner a {
+			color: #0d6efd;
+			font-weight: 600;
 		}
 
 		.status-icon {
@@ -849,6 +978,12 @@ app.get("/setup", async (c) => {
 			<a href="/logout" class="logout-btn">Logout</a>
 		</div>
 
+		${
+			pendingMcpResumeUrl
+				? `<div class="mcp-resume-banner">Finish connecting your MCP client: <a href="${pendingMcpResumeUrl.replace(/"/g, "&quot;")}">Continue authorization</a></div>`
+				: ""
+		}
+
 		<div class="status ${hasApiKey ? "configured" : "not-configured"}">
 			<span class="status-icon">${hasApiKey ? "✅" : "⚠️"}</span>
 			<div>
@@ -958,6 +1093,10 @@ app.get("/setup", async (c) => {
 				const data = await response.json();
 
 				if (response.ok) {
+					if (data.resumeOAuthUrl) {
+						window.location.href = data.resumeOAuthUrl;
+						return;
+					}
 					showMessage('✅ API key saved successfully!', 'success');
 					setTimeout(() => location.reload(), 1500);
 				} else {
@@ -1074,7 +1213,18 @@ app.post("/api/save-key", async (c) => {
 			apiKey
 		);
 
-		return c.json({ success: true });
+		const sessionToken = getSessionTokenFromCookie(c);
+		let resumeOAuthUrl: string | undefined;
+		if (sessionToken) {
+			const resume = await readOauthResume(c.env.OAUTH_KV, sessionToken);
+			if (resume) {
+				resumeOAuthUrl = buildResumeAuthorizeUrl(getBaseUrl(c), resume);
+			}
+		}
+
+		return resumeOAuthUrl
+			? c.json({ success: true, resumeOAuthUrl })
+			: c.json({ success: true });
 	} catch (error) {
 		console.error("API key save error:", error);
 		return c.json(

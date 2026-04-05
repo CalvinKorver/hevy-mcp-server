@@ -15,6 +15,10 @@ interface Env {
 	COOKIE_ENCRYPTION_KEY: string;
 	// Legacy: HEVY_API_KEY is deprecated in favor of per-user keys in KV
 	HEVY_API_KEY?: string;
+	/** Comma-separated GitHub logins allowed to sign in; omit for open registration */
+	ALLOWED_GITHUB_LOGINS?: string;
+	/** If set, GET /stats requires Authorization: Bearer <this value> */
+	STATS_ACCESS_TOKEN?: string;
 }
 
 // Variables interface for Hono context

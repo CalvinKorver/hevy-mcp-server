@@ -19,3 +19,9 @@ COOKIE_ENCRYPTION_KEY=your_encryption_key_here
 # Users configure their keys via the /setup web interface after OAuth authentication
 # The old single-user HEVY_API_KEY environment variable is no longer used
 
+# Optional: restrict which GitHub users may sign in (comma-separated, case-insensitive)
+# ALLOWED_GITHUB_LOGINS=yourlogin,partnerlogin
+
+# Optional: protect GET /stats (use wrangler secret put STATS_ACCESS_TOKEN in production)
+# STATS_ACCESS_TOKEN=long-random-string
+

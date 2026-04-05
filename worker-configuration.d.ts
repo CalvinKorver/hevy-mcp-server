@@ -12,6 +12,8 @@ declare namespace Cloudflare {
 		GITHUB_CLIENT_SECRET: string;
 		COOKIE_ENCRYPTION_KEY: string;
 		MCP_OBJECT: DurableObjectNamespace<import("./src/index").MyMCP>;
+		ALLOWED_GITHUB_LOGINS?: string;
+		STATS_ACCESS_TOKEN?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

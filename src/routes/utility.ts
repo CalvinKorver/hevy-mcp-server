@@ -15,6 +15,18 @@ utilityRoutes.get("/health", (c) => {
 
 // Stats endpoint - show user and session counts
 utilityRoutes.get("/stats", async (c) => {
+	const statsSecret = c.env.STATS_ACCESS_TOKEN;
+	if (statsSecret && statsSecret.length > 0) {
+		const auth = c.req.header("Authorization");
+		const token = auth?.startsWith("Bearer ") ? auth.slice(7) : "";
+		if (token !== statsSecret) {
+			return c.json(
+				{ error: "unauthorized", message: "Invalid or missing stats token." },
+				401,
+			);
+		}
+	}
+
 	try {
 		const kv = c.env.OAUTH_KV;
 
