@@ -30,3 +30,16 @@ Remote MCP on **Cloudflare Workers** exposing the **Hevy API** as tools.
 - **Wrangler**: `wrangler.jsonc` (DO `MyMCP`, KV `OAUTH_KV`)  
 - Secrets: GitHub OAuth, `COOKIE_ENCRYPTION_KEY`; Hevy keys are per-user via `/setup`, not a single worker secret for normal multi-user use.  
 - Optional: `ALLOWED_GITHUB_LOGINS` (comma-separated); `STATS_ACCESS_TOKEN` (Bearer required for `GET /stats` when set). See `.dev.vars.example`.
+
+## Deploy troubleshooting (Cloudflare)
+
+**Error 10211 — “migrations must be fully applied by running wrangler deploy”**  
+[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/) uses **`npx wrangler versions upload`** for commits on **non-production** branches. That path cannot apply Durable Object migrations defined in `wrangler.jsonc`.
+
+**Fix (pick one):**
+
+1. **Merge to your production Git branch** (the one configured on the Worker) so the build runs **`npx wrangler deploy`** (default for production).
+2. **Dashboard:** Worker → **Settings** → **Build** → set **Non-production branch deploy command** to `npm run deploy` (same as full deploy; know that this deploys that branch’s code to this Worker).
+3. **Local once:** `npm run deploy` with Wrangler logged into the target account (applies migrations; required for a brand-new Worker on that account).
+
+Docs: [Gradual deployments — Migrations](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#migrations).

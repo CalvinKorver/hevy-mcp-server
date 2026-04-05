@@ -1,6 +1,11 @@
 /**
  * For more details on how to configure Wrangler, refer to:
  * https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Workers Builds (Git): non-production branches default to `wrangler versions upload`,
+ * which cannot apply Durable Object migrations (API error 10211). Use your production
+ * branch for deploy, set Settings > Build > "Non-production branch deploy command" to
+ * `npm run deploy`, or run `npm run deploy` locally once. See AGENTS.md.
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
