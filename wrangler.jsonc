@@ -49,15 +49,10 @@
 		}
 	],
 	/**
-	 * Production Routes
-	 * Custom domain configuration for production deployment
+	 * Custom domains: add only for zones in *your* Cloudflare account (Worker →
+	 * Triggers → Custom Domains), or uncomment a "routes" block here. Upstream used
+	 * hevy.tomt.it — that zone must not be in wrangler.jsonc for other accounts.
 	 */
-	"routes": [
-		{
-			"pattern": "hevy.tomt.it",
-			"custom_domain": true
-		}
-	],
 	/**
 	 * Development Environment
 	 * Overrides for local development to avoid Host header rewriting
