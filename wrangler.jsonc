@@ -15,9 +15,10 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"limits": {
-		"cpu_ms": 50
-	},
+	/**
+	 * Do not set limits.cpu_ms here: Workers Free rejects deploy with error 100328.
+	 * Paid accounts may set CPU limits in the dashboard if desired.
+	 */
 	"migrations": [
 		{
 			"new_sqlite_classes": [
