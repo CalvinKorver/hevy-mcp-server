@@ -1,0 +1,42 @@
+# Uses full `wrangler deploy` (required for Durable Object migrations).
+# Cloudflare Workers Builds often runs `wrangler versions upload` on non-main branches,
+# which fails with API error 10211 for this project.
+#
+# Setup:
+# 1. GitHub repo → Settings → Secrets → Actions → add:
+#    - CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, Account read, etc.)
+#    - CLOUDFLARE_ACCOUNT_ID (from Cloudflare dashboard URL or Workers overview)
+# 2. Either disable Workers Builds for this repo (Worker → Settings → Builds)
+#    or fix the Build "deploy command" there — see AGENTS.md.
+
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Deploy
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

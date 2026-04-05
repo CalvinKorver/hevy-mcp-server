@@ -33,13 +33,20 @@ Remote MCP on **Cloudflare Workers** exposing the **Hevy API** as tools.
 
 ## Deploy troubleshooting (Cloudflare)
 
-**Error 10211 — “migrations must be fully applied by running wrangler deploy”**  
-[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/) uses **`npx wrangler versions upload`** for commits on **non-production** branches. That path cannot apply Durable Object migrations defined in `wrangler.jsonc`.
+**Error 10211 — “migrations must be fully applied by running wrangler deploy”**
 
-**Fix (pick one):**
+If the build log contains **`Executing user deploy command: npx wrangler versions upload`**, that command **cannot** apply Durable Object migrations. This project’s `wrangler.jsonc` includes a DO migration (`MyMCP` / `v1`), so the upload will always fail until a **full deploy** runs.
 
-1. **Merge to your production Git branch** (the one configured on the Worker) so the build runs **`npx wrangler deploy`** (default for production).
-2. **Dashboard:** Worker → **Settings** → **Build** → set **Non-production branch deploy command** to `npm run deploy` (same as full deploy; know that this deploys that branch’s code to this Worker).
-3. **Local once:** `npm run deploy` with Wrangler logged into the target account (applies migrations; required for a brand-new Worker on that account).
+**Fix in Cloudflare (Workers Builds):**
+
+1. **Workers & Pages** → select **hevy-mcp-server** → **Settings** → **Build**.
+2. **Deploy command** (production branch): should be **`npm run deploy`** or **`npx wrangler deploy`** (not `versions upload`).
+3. **Non-production branch deploy command** (if branch previews are enabled): change from **`npx wrangler versions upload`** to **`npm run deploy`**. That runs a real deploy for preview branches too (same Worker); only use if you accept that.
+
+Optional: turn off **non-production branch builds** if you do not need preview uploads.
+
+**Alternative — GitHub Actions:** This repo includes [`.github/workflows/deploy-worker.yml`](.github/workflows/deploy-worker.yml). Add repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, merge to `main`, and either disable Cloudflare Workers Builds for this Worker or align both to avoid double deploys.
+
+**Local one-shot:** `npm run deploy` from a machine with Wrangler authenticated to the target account (applies migrations on first success).
 
 Docs: [Gradual deployments — Migrations](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#migrations).
