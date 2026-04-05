@@ -133,30 +133,17 @@ function generateState(): string {
 }
 
 /**
- * Helper function to get the base URL for OAuth endpoints
- * Handles local development where Wrangler rewrites the Host header
+ * Base URL for OAuth metadata, GitHub redirect_uri, and session hints.
+ * Must reflect the host the *client used* to reach this Worker.
+ *
+ * Do not derive this from CF-Connecting-IP: in production that is the end-user's
+ * IP and can be 127.0.0.1/::1 (VPN, tunnel, odd stacks), which incorrectly
+ * forced localhost:8787 and broke OAuth for remote users.
+ *
+ * Wrangler dev: open http://localhost:8787 — url.host is already localhost:8787.
  */
 function getBaseUrl(c: any): string {
 	const url = new URL(c.req.url);
-
-	// Check for X-Forwarded-Host header (reverse proxy)
-	const forwardedHost = c.req.header("X-Forwarded-Host");
-	if (forwardedHost) {
-		return `${url.protocol}//${forwardedHost}`;
-	}
-
-	// Check if request came from localhost (local dev)
-	// Wrangler dev adds CF-Connecting-IP with localhost address
-	const cfConnectingIp = c.req.header("CF-Connecting-IP");
-
-	// Check if connecting from localhost (::1 is IPv6 localhost, 127.0.0.1 is IPv4)
-	const isLocalhost = cfConnectingIp === "::1" || cfConnectingIp === "127.0.0.1" || cfConnectingIp?.startsWith("127.");
-
-	if (isLocalhost) {
-		return `${url.protocol}//localhost:8787`;
-	}
-
-	// Production: use the Host header as-is
 	return `${url.protocol}//${url.host}`;
 }
 
